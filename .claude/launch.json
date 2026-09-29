@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "study-assistant",
+      "runtimeExecutable": "./venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.headless", "true", "--server.port", "8511"],
+      "port": 8511
+    },
+    {
+      "name": "study-assistant-system-streamlit",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.headless", "true", "--server.port", "8512"],
+      "port": 8512
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+streamlit
+pypdf
+openai
+python-dotenv
+fpdf2
+python-docx
+python-pptx
+openpyxl

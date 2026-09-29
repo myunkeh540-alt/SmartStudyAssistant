@@ -1,0 +1,561 @@
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap');
+
+:root {
+    --ssa-paper: #f5f6fa;
+    --ssa-surface: #ffffff;
+    --ssa-rule: #dfe2ec;
+    --ssa-ink: #141b34;
+    --ssa-ink-soft: #4f5670;
+    --ssa-blue: #0a3aa8;
+    --ssa-blue-deep: #082d84;
+    --ssa-blue-wash: #e8eefb;
+    --ssa-highlight: #ffe14d;
+    --ssa-right: #1f7a4d;
+    --ssa-wrong: #c2372b;
+    --ssa-radius: 8px;
+    --ssa-sans: 'Bricolage Grotesque', 'Segoe UI', sans-serif;
+    --ssa-serif: 'Source Serif 4', Georgia, serif;
+}
+
+/* ---------- Base ---------- */
+
+html, body, [class*="css"],
+.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5,
+.stApp p, .stApp li, .stApp label, .stApp button, .stApp textarea, .stApp input,
+[data-testid="stCaptionContainer"], [data-testid="stMarkdownContainer"] {
+    font-family: var(--ssa-sans);
+}
+
+[data-testid="stAppViewContainer"] {
+    background-color: var(--ssa-paper);
+}
+
+[data-testid="stHeader"] {
+    background-color: var(--ssa-paper);
+}
+
+.block-container {
+    max-width: 62rem;
+    padding-top: 2.5rem;
+}
+
+h1, h2, h3, h4 {
+    font-family: var(--ssa-sans);
+    color: var(--ssa-ink);
+    font-weight: 600;
+    letter-spacing: -0.015em;
+}
+
+h2 {
+    font-size: 2rem;
+}
+
+p, li, label {
+    color: var(--ssa-ink);
+}
+
+[data-testid="stCaptionContainer"] {
+    color: var(--ssa-ink-soft);
+}
+
+hr {
+    border-color: var(--ssa-rule);
+}
+
+:focus-visible {
+    outline: 3px solid var(--ssa-blue);
+    outline-offset: 2px;
+}
+
+/* ---------- Sidebar ---------- */
+
+section[data-testid="stSidebar"] {
+    background-color: var(--ssa-surface);
+    border-right: 1px solid var(--ssa-rule);
+}
+
+.ssa-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.25rem;
+}
+
+.ssa-brand img {
+    width: 44px;
+    height: 44px;
+}
+
+.ssa-brand-name {
+    font-family: var(--ssa-sans);
+    font-weight: 700;
+    font-size: 1.15rem;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    color: var(--ssa-blue);
+}
+
+/* Nav: the active page is a blue bar and wash, not a filled button. */
+section[data-testid="stSidebar"] .stButton button {
+    width: 100%;
+    justify-content: flex-start;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 0 var(--ssa-radius) var(--ssa-radius) 0;
+    color: var(--ssa-ink-soft);
+    font-weight: 500;
+    margin-bottom: 2px;
+    padding: 0.5rem 0.9rem;
+}
+
+section[data-testid="stSidebar"] .stButton button:hover {
+    background: var(--ssa-paper);
+    color: var(--ssa-ink);
+}
+
+section[data-testid="stSidebar"] .stButton button[kind="primary"] {
+    background: var(--ssa-blue-wash);
+    border-left-color: var(--ssa-blue);
+    color: var(--ssa-blue);
+    font-weight: 600;
+}
+
+/* ---------- Cards and buttons ---------- */
+
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    background-color: var(--ssa-surface);
+    border: 1px solid var(--ssa-rule) !important;
+    border-radius: var(--ssa-radius) !important;
+    padding: 6px 8px;
+}
+
+.stButton button, .stDownloadButton button, .stFormSubmitButton button {
+    font-family: var(--ssa-sans);
+    border-radius: var(--ssa-radius);
+    font-weight: 500;
+    border: 1px solid var(--ssa-rule);
+    padding: 0.45rem 1.1rem;
+}
+
+.stApp button[kind^="primary"] {
+    background-color: var(--ssa-blue);
+    border-color: var(--ssa-blue);
+    color: #fff;
+    font-weight: 600;
+}
+
+.stApp button[kind^="primary"]:hover {
+    background-color: var(--ssa-blue-deep);
+    border-color: var(--ssa-blue-deep);
+}
+
+div[data-testid="stPopoverBody"] .stButton button,
+div[data-testid="stPopoverBody"] .stDownloadButton button {
+    margin-bottom: 6px;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+table th, table td {
+    border: 1px solid var(--ssa-rule);
+    padding: 6px 10px;
+    text-align: left;
+}
+
+/* ---------- Summary: reads like a textbook page ---------- */
+
+.stApp [class*="st-key-sum_"] li,
+.stApp [class*="st-key-sum_"] li p {
+    font-family: var(--ssa-serif);
+    font-size: 1.05rem;
+    line-height: 1.7;
+    max-width: 68ch;
+}
+
+[class*="st-key-sum_"] li::marker {
+    color: var(--ssa-blue);
+}
+
+/* Exam focus items get the highlighter, the only place it is used at rest. */
+.st-key-sum_exam_focus li {
+    background-image: linear-gradient(transparent 58%, var(--ssa-highlight) 58%);
+    background-repeat: no-repeat;
+    background-size: fit-content;
+    width: fit-content;
+    max-width: 68ch;
+}
+
+.st-key-sum_exam_focus li p {
+    display: inline;
+}
+
+/* ---------- Notes source line ---------- */
+
+.ssa-source {
+    font-size: 0.95rem;
+    color: var(--ssa-ink-soft);
+}
+
+.ssa-source strong {
+    color: var(--ssa-ink);
+}
+
+/* ---------- Quiz ---------- */
+
+[class*="st-key-qres_"] {
+    border-left: 4px solid var(--ssa-rule);
+    border-radius: var(--ssa-radius);
+    padding-left: 0.75rem;
+}
+
+[class*="st-key-qres_"][class*="_ok"] {
+    border-left-color: var(--ssa-right);
+}
+
+[class*="st-key-qres_"][class*="_no"] {
+    border-left-color: var(--ssa-wrong);
+}
+
+.ssa-verdict-ok { color: var(--ssa-right); font-weight: 600; }
+.ssa-verdict-no { color: var(--ssa-wrong); font-weight: 600; }
+
+/* Score counts up once when results arrive. */
+@property --ssa-n {
+    syntax: '<integer>';
+    initial-value: 0;
+    inherits: false;
+}
+
+.ssa-score {
+    --ssa-n: var(--ssa-target);
+    font-family: var(--ssa-sans);
+    font-weight: 700;
+    font-size: 4rem;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    color: var(--ssa-blue);
+    margin: 0.5rem 0 1rem;
+    animation: ssa-count 0.9s ease-out;
+    counter-reset: ssa-n var(--ssa-n);
+}
+
+.ssa-score::before {
+    content: counter(ssa-n);
+}
+
+.ssa-score-total {
+    font-size: 1.6rem;
+    font-weight: 500;
+    color: var(--ssa-ink-soft);
+    letter-spacing: 0;
+}
+
+@keyframes ssa-count {
+    from { --ssa-n: 0; }
+}
+
+/* ---------- Flashcards: a real index card ---------- */
+
+.stApp .ssa-card {
+    --margin: 3.3rem;
+    position: relative;
+    isolation: isolate;
+    min-height: 15rem;
+    padding: 4.2rem 2.5rem 2.4rem 4.5rem;
+    background-color: var(--ssa-surface);
+    background-image: linear-gradient(
+        to right,
+        transparent var(--margin),
+        #e9a9a3 var(--margin),
+        #e9a9a3 calc(var(--margin) + 1px),
+        transparent calc(var(--margin) + 1px)
+    );
+    border: 1px solid var(--ssa-rule);
+    border-radius: 4px;
+    box-shadow: 0 1px 0 var(--ssa-rule), 0 10px 22px -14px rgba(20, 27, 52, 0.4);
+    font-family: var(--ssa-serif);
+    font-size: 1.45rem;
+    line-height: 2.1rem;
+    color: var(--ssa-ink);
+}
+
+/* Red header rule, like the top line on a printed index card. */
+.ssa-card::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 2.6rem;
+    height: 2px;
+    background: var(--ssa-wrong);
+    opacity: 0.75;
+}
+
+/* Blue ruled lines start under the header, one per line of text. */
+.ssa-card::after {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    left: 0;
+    right: 0;
+    top: 4.2rem;
+    bottom: 0;
+    background-image: repeating-linear-gradient(
+        to bottom,
+        transparent 0,
+        transparent calc(2.1rem - 1px),
+        #cfd8f0 calc(2.1rem - 1px),
+        #cfd8f0 2.1rem
+    );
+}
+
+.ssa-card-side {
+    position: absolute;
+    top: 0.7rem;
+    left: 4.5rem;
+    font-family: var(--ssa-sans);
+    font-size: 0.85rem;
+    line-height: 1.2;
+    font-weight: 600;
+    color: var(--ssa-ink-soft);
+}
+
+.ssa-card.ssa-card-back {
+    background-color: #fffdf0;
+    font-size: 1.25rem;
+    transform-origin: top center;
+    animation: ssa-flip 0.38s ease-out;
+}
+
+@keyframes ssa-flip {
+    from { transform: perspective(900px) rotateX(-80deg); opacity: 0.2; }
+    to   { transform: perspective(900px) rotateX(0); opacity: 1; }
+}
+
+.ssa-card-count {
+    font-size: 0.95rem;
+    color: var(--ssa-ink-soft);
+    margin-bottom: 0.6rem;
+}
+
+@media (max-width: 640px) {
+    .stApp .ssa-card {
+        --margin: 1.8rem;
+        padding: 4.2rem 1.2rem 1.6rem 2.6rem;
+        font-size: 1.2rem;
+    }
+    .ssa-card-side { left: 2.6rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ssa-card.ssa-card-back, .ssa-score {
+        animation: none;
+    }
+}
+
+/* ---------- Fixes: button text, nav alignment ---------- */
+
+.stApp button[kind^="primary"] p,
+.stApp button[kind^="primary"] span {
+    color: #fff;
+}
+
+section[data-testid="stSidebar"] .stButton button > div {
+    justify-content: flex-start;
+}
+
+section[data-testid="stSidebar"] .stButton button p {
+    color: inherit;
+    text-align: left;
+}
+
+section[data-testid="stSidebar"] .stButton button[kind="primary"] span {
+    color: var(--ssa-blue);
+}
+
+/* ---------- Notes panel: a reading pane, headings scaled to fit ---------- */
+
+.st-key-notes_card {
+    background: #fbfcfe;
+}
+
+.stApp .st-key-notes_card p,
+.stApp .st-key-notes_card li {
+    font-family: var(--ssa-serif);
+    font-size: 1rem;
+    line-height: 1.65;
+}
+
+.stApp .st-key-notes_card h1,
+.stApp .st-key-notes_card h2,
+.stApp .st-key-notes_card h3,
+.stApp .st-key-notes_card h4 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    padding: 0.9rem 0 0.2rem;
+    color: var(--ssa-blue);
+}
+
+.stApp h4 {
+    font-size: 1.25rem;
+    margin-top: 0.5rem;
+}
+
+/* ---------- Quiz: one question at a time ---------- */
+
+.ssa-qmeta {
+    font-size: 0.95rem;
+    color: var(--ssa-ink-soft);
+    margin-bottom: 0.4rem;
+}
+
+.stApp .ssa-question {
+    font-family: var(--ssa-serif);
+    font-size: 1.5rem;
+    line-height: 1.45;
+    max-width: 44ch;
+    margin: 1.25rem 0 1.25rem;
+    color: var(--ssa-ink);
+}
+
+[data-testid="stProgress"] > div > div {
+    background-color: var(--ssa-rule);
+}
+
+[data-testid="stProgress"] [role="progressbar"] > div,
+[data-testid="stProgress"] div[data-baseweb="progress-bar"] > div > div {
+    background-color: var(--ssa-blue);
+}
+
+/* Unanswered choices: full-width tappable rows. */
+[data-testid="stRadio"] [role="radiogroup"] {
+    gap: 0.5rem;
+}
+
+[data-testid="stRadio"] label {
+    background: var(--ssa-surface);
+    border: 1px solid var(--ssa-rule);
+    border-radius: var(--ssa-radius);
+    padding: 0.75rem 1rem;
+    width: 100%;
+    cursor: pointer;
+}
+
+[data-testid="stRadio"] label:hover {
+    border-color: var(--ssa-blue);
+    background: var(--ssa-blue-wash);
+}
+
+/* Answered choices: same shape, marked by colour and a note. */
+.ssa-choice {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    background: var(--ssa-surface);
+    border: 1px solid var(--ssa-rule);
+    border-radius: var(--ssa-radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.ssa-choice-idle { color: var(--ssa-ink-soft); }
+
+.ssa-choice-ok {
+    border: 2px solid var(--ssa-right);
+    background: #eef8f2;
+}
+
+.ssa-choice-no {
+    border: 2px solid var(--ssa-wrong);
+    background: #fcefed;
+}
+
+.ssa-choice-note {
+    flex: none;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.ssa-choice-ok .ssa-choice-note { color: var(--ssa-right); }
+.ssa-choice-no .ssa-choice-note { color: var(--ssa-wrong); }
+
+.ssa-verdict {
+    font-weight: 700;
+    font-size: 1.1rem;
+    margin: 1rem 0 0.25rem;
+}
+
+.stApp .ssa-explain {
+    font-family: var(--ssa-serif);
+    font-size: 1.05rem;
+    line-height: 1.65;
+    max-width: 62ch;
+    margin-bottom: 1.25rem;
+}
+
+.ssa-hint {
+    font-size: 0.95rem;
+    color: var(--ssa-ink-soft);
+    border-left: 3px solid var(--ssa-highlight);
+    padding-left: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.ssa-percent {
+    font-size: 1.1rem;
+    color: var(--ssa-ink-soft);
+    margin-bottom: 1rem;
+}
+
+.stApp button[kind="tertiary"] {
+    color: var(--ssa-ink-soft);
+    border: none;
+    padding-left: 0;
+}
+
+/* ---------- History: a study record ---------- */
+
+.ssa-stat {
+    background: var(--ssa-surface);
+    border: 1px solid var(--ssa-rule);
+    border-radius: var(--ssa-radius);
+    padding: 0.9rem 1.1rem;
+}
+
+.ssa-stat-value {
+    font-weight: 700;
+    font-size: 2rem;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    color: var(--ssa-blue);
+}
+
+.ssa-stat-label {
+    font-size: 0.9rem;
+    color: var(--ssa-ink-soft);
+    margin-top: 0.2rem;
+}
+
+.ssa-doc-title {
+    font-weight: 600;
+    font-size: 1.15rem;
+    letter-spacing: -0.01em;
+    color: var(--ssa-ink);
+}
+
+[class*="st-key-hdoc_"] [data-testid="stHorizontalBlock"] {
+    align-items: center;
+    border-top: 1px solid var(--ssa-rule);
+    padding-top: 0.4rem;
+}
+
+[data-testid="stSegmentedControl"] button[aria-checked="true"],
+[data-testid="stSegmentedControl"] button[aria-pressed="true"] {
+    color: var(--ssa-blue);
+    font-weight: 600;
+}
