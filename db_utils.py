@@ -1,5 +1,9 @@
 """
-SQLite persistence for Smart Study Assistant.
+Persistence for Smart Study Assistant.
+
+Uses Postgres when the DATABASE_URL environment variable is set (needed on hosts that
+lose local files, and so every deployment shares one database), otherwise a local
+SQLite file.
 
 History is stored as documents (the notes a student studied) and activities
 (a summary, quiz, or flashcard set generated from a document). The original
@@ -9,9 +13,11 @@ the first time they are seen.
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 DB_PATH = "study_assistant.db"
 
@@ -30,14 +36,70 @@ def _plain_preview(notes_text: str, length: int = 120) -> str:
     return plain[:length]
 
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def local_tz():
+    """Timezone used when showing times; set APP_TIMEZONE (e.g. Asia/Kuala_Lumpur) on a server that runs in UTC."""
+    name = os.environ.get("APP_TIMEZONE", "").strip()
+    if name:
+        try:
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    return datetime.now().astimezone().tzinfo
+
+
+class _Connection:
+    """
+    Thin wrapper so the queries below run on both SQLite and Postgres. Rows support
+    row["column"] on both. Use as a context manager: commits on success, rolls back on
+    error, and always closes.
+    """
+
+    def __init__(self) -> None:
+        url = os.environ.get("DATABASE_URL", "").strip()
+        self.pg = bool(url)
+        if self.pg:
+            import psycopg
+            from psycopg.rows import dict_row
+
+            # prepare_threshold=None keeps this working behind Supabase's transaction pooler.
+            self._raw = psycopg.connect(url, row_factory=dict_row, prepare_threshold=None)
+        else:
+            self._raw = sqlite3.connect(DB_PATH)
+            self._raw.row_factory = sqlite3.Row
+
+    def execute(self, sql: str, params=()):
+        if self.pg:
+            sql = sql.replace("?", "%s").replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        return self._raw.execute(sql, params)
+
+    def insert(self, sql: str, params=()) -> int:
+        """Runs an INSERT into a table with an integer `id` key and returns the new id."""
+        if self.pg:
+            return self.execute(sql + " RETURNING id", params).fetchone()["id"]
+        return self.execute(sql, params).lastrowid
+
+    def __enter__(self) -> "_Connection":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            if exc_type:
+                self._raw.rollback()
+            else:
+                self._raw.commit()
+        finally:
+            self._raw.close()
+
+
+def _connect() -> _Connection:
+    return _Connection()
 
 
 def init_db() -> None:
     with _connect() as conn:
+        if conn.pg:
+            # Several sessions can start at once on a fresh database; let one create the tables.
+            conn.execute("SELECT pg_advisory_xact_lock(727274)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -76,8 +138,69 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS visitors (
+                visitor_id TEXT PRIMARY KEY,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                visits INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                visitor_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                event TEXT NOT NULL,
+                source_name TEXT NOT NULL DEFAULT '',
+                source_type TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        # source_name: the file/text an activity was generated from, as named by the visitor.
+        # visitor_id: rows saved before visitor tracking keep a NULL visitor ("legacy").
+        if conn.pg:
+            conn.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS source_name TEXT")
+            conn.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS visitor_id TEXT")
+        else:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(activities)")}
+            if "source_name" not in columns:
+                conn.execute("ALTER TABLE activities ADD COLUMN source_name TEXT")
+            if "visitor_id" not in columns:
+                conn.execute("ALTER TABLE activities ADD COLUMN visitor_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_activities_visitor ON activities(visitor_id)")
         conn.execute("CREATE TABLE IF NOT EXISTS migrated_sessions (session_id INTEGER PRIMARY KEY)")
         _migrate_sessions(conn)
+
+
+def log_event(visitor_id: str, event: str, source_name: str = "", source_type: str = "", detail: str = "") -> None:
+    """
+    Records something a visitor did that is not a saved activity, such as an upload,
+    a paste, or a failed upload/generation, so it still shows up in the admin log.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO events (visitor_id, created_at, event, source_name, source_type, detail) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (visitor_id, _now(), event, source_name, source_type, detail[:300]),
+        )
+
+
+def touch_visitor(visitor_id: str) -> None:
+    """Records the start of a visit by an anonymous browser (first seen, last seen, visit count)."""
+    now = _now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO visitors (visitor_id, first_seen, last_seen) VALUES (?, ?, ?)
+            ON CONFLICT(visitor_id) DO UPDATE SET last_seen = excluded.last_seen, visits = visitors.visits + 1
+            """,
+            (visitor_id, now, now),
+        )
 
 
 # ---------- documents and activities ----------
@@ -100,14 +223,13 @@ def _upsert_document(
     if row:
         return row["id"]
     title = _derive_title(notes_text) if source_name in _GENERIC_SOURCES else source_name
-    cursor = conn.execute(
+    return conn.insert(
         """
         INSERT INTO documents (created_at, title, source_name, source_type, notes_text, notes_hash)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (created_at or _now(), title, source_name or "Pasted text", source_type or "Text", notes_text, notes_hash),
     )
-    return cursor.lastrowid
 
 
 def _insert_activity(
@@ -118,15 +240,16 @@ def _insert_activity(
     created_at: str | None = None,
     score: int | None = None,
     total: int | None = None,
+    visitor_id: str | None = None,
+    source_name: str | None = None,
 ) -> int:
-    cursor = conn.execute(
+    return conn.insert(
         """
-        INSERT INTO activities (document_id, kind, created_at, payload_json, score, total)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO activities (document_id, kind, created_at, payload_json, score, total, visitor_id, source_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (document_id, kind, created_at or _now(), json.dumps(payload), score, total),
+        (document_id, kind, created_at or _now(), json.dumps(payload), score, total, visitor_id, source_name),
     )
-    return cursor.lastrowid
 
 
 def upsert_document(notes_text: str, source_name: str, source_type: str) -> int:
@@ -135,20 +258,22 @@ def upsert_document(notes_text: str, source_name: str, source_type: str) -> int:
         return _upsert_document(conn, notes_text, source_name, source_type)
 
 
-def add_activity(document_id: int, kind: str, payload) -> int:
+def add_activity(document_id: int, kind: str, payload, visitor_id: str, source_name: str | None = None) -> int:
     """kind is 'summary', 'quiz' or 'flashcards'."""
     with _connect() as conn:
-        return _insert_activity(conn, document_id, kind, payload)
+        return _insert_activity(conn, document_id, kind, payload, visitor_id=visitor_id, source_name=source_name)
 
 
-def record_quiz_result(activity_id: int, score: int, total: int) -> int:
+def record_quiz_result(activity_id: int, score: int, total: int, visitor_id: str) -> int:
     """
     Stores a finished quiz attempt. The first attempt fills in the score on the
     quiz's own record; later attempts (Try again) are saved as new records so
     every score counts. Returns the id of the record that holds this attempt.
     """
     with _connect() as conn:
-        row = conn.execute("SELECT * FROM activities WHERE id = ?", (activity_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM activities WHERE id = ? AND visitor_id = ?", (activity_id, visitor_id)
+        ).fetchone()
         if row["score"] is None:
             conn.execute(
                 "UPDATE activities SET score = ?, total = ?, created_at = ? WHERE id = ?",
@@ -156,7 +281,14 @@ def record_quiz_result(activity_id: int, score: int, total: int) -> int:
             )
             return activity_id
         return _insert_activity(
-            conn, row["document_id"], "quiz", json.loads(row["payload_json"]), score=score, total=total
+            conn,
+            row["document_id"],
+            "quiz",
+            json.loads(row["payload_json"]),
+            score=score,
+            total=total,
+            visitor_id=visitor_id,
+            source_name=row["source_name"],
         )
 
 
@@ -189,9 +321,9 @@ def _decode_summary(raw: str) -> dict:
     return {"key_points": [raw], "definitions": [], "important_concepts": [], "formulas": [], "exam_focus": []}
 
 
-def list_history() -> list[dict]:
+def list_history(visitor_id: str) -> list[dict]:
     """
-    Documents that have at least one activity, most recently studied first.
+    This visitor's documents that have at least one activity, most recently studied first.
     Each has an "activities" list (newest first) of
     {id, kind, created_at, score, total, count, topics}.
     """
@@ -199,7 +331,8 @@ def list_history() -> list[dict]:
         docs = conn.execute("SELECT id, title, source_name, source_type FROM documents").fetchall()
         acts = conn.execute(
             "SELECT id, document_id, kind, created_at, score, total, payload_json "
-            "FROM activities ORDER BY created_at DESC, id DESC"
+            "FROM activities WHERE visitor_id = ? ORDER BY created_at DESC, id DESC",
+            (visitor_id,),
         ).fetchall()
 
     by_doc: dict[int, list[dict]] = {}
@@ -236,12 +369,17 @@ def list_history() -> list[dict]:
     return history
 
 
-def history_stats() -> dict:
+def history_stats(visitor_id: str) -> dict:
     with _connect() as conn:
         quiz_rows = conn.execute(
-            "SELECT score, total FROM activities WHERE kind = 'quiz' AND score IS NOT NULL AND total > 0"
+            "SELECT score, total FROM activities "
+            "WHERE kind = 'quiz' AND score IS NOT NULL AND total > 0 AND visitor_id = ?",
+            (visitor_id,),
         ).fetchall()
-        card_rows = conn.execute("SELECT payload_json FROM activities WHERE kind = 'flashcards'").fetchall()
+        card_rows = conn.execute(
+            "SELECT payload_json FROM activities WHERE kind = 'flashcards' AND visitor_id = ?",
+            (visitor_id,),
+        ).fetchall()
     percents = [100 * r["score"] / r["total"] for r in quiz_rows]
     return {
         "quizzes_completed": len(quiz_rows),
@@ -250,7 +388,7 @@ def history_stats() -> dict:
     }
 
 
-def get_activity(activity_id: int) -> dict:
+def get_activity(activity_id: int, visitor_id: str) -> dict:
     """
     The activity plus its document's notes, and the newest summary/quiz/flashcards
     for that document so the whole workspace can be restored consistently.
@@ -261,9 +399,9 @@ def get_activity(activity_id: int) -> dict:
             SELECT a.id, a.kind, a.document_id, a.payload_json,
                    d.notes_text, d.source_name, d.source_type, d.title
             FROM activities a JOIN documents d ON d.id = a.document_id
-            WHERE a.id = ?
+            WHERE a.id = ? AND a.visitor_id = ?
             """,
-            (activity_id,),
+            (activity_id, visitor_id),
         ).fetchone()
         latest = {}
         for kind in ("summary", "quiz", "flashcards"):
@@ -271,9 +409,9 @@ def get_activity(activity_id: int) -> dict:
                 latest[kind] = (row["id"], json.loads(row["payload_json"]))
                 continue
             other = conn.execute(
-                "SELECT id, payload_json FROM activities WHERE document_id = ? AND kind = ? "
+                "SELECT id, payload_json FROM activities WHERE document_id = ? AND kind = ? AND visitor_id = ? "
                 "ORDER BY created_at DESC, id DESC LIMIT 1",
-                (row["document_id"], kind),
+                (row["document_id"], kind, visitor_id),
             ).fetchone()
             latest[kind] = (other["id"], json.loads(other["payload_json"])) if other else (None, None)
     return {
@@ -291,16 +429,120 @@ def get_activity(activity_id: int) -> dict:
     }
 
 
+# ---------- admin: activity across all visitors ----------
+
+LEGACY_VISITOR = "legacy"
+
+
+def admin_overview() -> dict:
+    with _connect() as conn:
+        visitors = conn.execute("SELECT COUNT(*) AS n FROM visitors").fetchone()["n"]
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS activities,
+                   COALESCE(SUM(CASE WHEN kind = 'quiz' AND score IS NOT NULL THEN 1 ELSE 0 END), 0)
+                       AS quizzes_completed,
+                   AVG(CASE WHEN kind = 'quiz' AND total > 0 THEN 100.0 * score / total END) AS average_score
+            FROM activities WHERE visitor_id IS NOT NULL
+            """
+        ).fetchone()
+        today_start = (
+            datetime.now(local_tz()).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        )
+        active_today = conn.execute(
+            "SELECT COUNT(*) AS n FROM visitors WHERE last_seen >= ?", (today_start.isoformat(),)
+        ).fetchone()["n"]
+    return {
+        "visitors": visitors,
+        "active_today": active_today,
+        "activities": row["activities"],
+        "quizzes_completed": row["quizzes_completed"],
+        "average_score": round(row["average_score"]) if row["average_score"] is not None else None,
+    }
+
+
+def admin_visitors() -> list[dict]:
+    """One row per anonymous visitor, most recently seen first, plus a "legacy" row for pre-tracking data."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT v.visitor_id, v.first_seen, v.last_seen, v.visits,
+                   COUNT(DISTINCT a.document_id) AS documents,
+                   COALESCE(SUM(CASE WHEN a.kind = 'summary' THEN 1 ELSE 0 END), 0) AS summaries,
+                   COALESCE(SUM(CASE WHEN a.kind = 'quiz' THEN 1 ELSE 0 END), 0) AS quizzes,
+                   COALESCE(SUM(CASE WHEN a.kind = 'flashcards' THEN 1 ELSE 0 END), 0) AS flashcard_sets,
+                   AVG(CASE WHEN a.kind = 'quiz' AND a.total > 0 THEN 100.0 * a.score / a.total END) AS avg_score,
+                   MAX(a.created_at) AS last_activity
+            FROM visitors v LEFT JOIN activities a ON a.visitor_id = v.visitor_id
+            GROUP BY v.visitor_id ORDER BY v.last_seen DESC
+            """
+        ).fetchall()
+        legacy = conn.execute(
+            """
+            SELECT COUNT(DISTINCT document_id) AS documents,
+                   COALESCE(SUM(CASE WHEN kind = 'summary' THEN 1 ELSE 0 END), 0) AS summaries,
+                   COALESCE(SUM(CASE WHEN kind = 'quiz' THEN 1 ELSE 0 END), 0) AS quizzes,
+                   COALESCE(SUM(CASE WHEN kind = 'flashcards' THEN 1 ELSE 0 END), 0) AS flashcard_sets,
+                   AVG(CASE WHEN kind = 'quiz' AND total > 0 THEN 100.0 * score / total END) AS avg_score,
+                   MAX(created_at) AS last_activity, MIN(created_at) AS first_seen
+            FROM activities WHERE visitor_id IS NULL
+            """
+        ).fetchone()
+    out = [dict(r) for r in rows]
+    if legacy["last_activity"]:
+        out.append(
+            {**dict(legacy), "visitor_id": LEGACY_VISITOR, "last_seen": legacy["last_activity"], "visits": None}
+        )
+    return out
+
+
+def admin_activity(visitor_id: str | None = None, limit: int = 500) -> list[dict]:
+    """Newest activities across all visitors, or for one visitor (LEGACY_VISITOR selects pre-tracking rows)."""
+    where, params = "", []
+    if visitor_id == LEGACY_VISITOR:
+        where = "WHERE a.visitor_id IS NULL"
+    elif visitor_id:
+        where, params = "WHERE a.visitor_id = ?", [visitor_id]
+    with _connect() as conn:
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                f"""
+                SELECT a.id, a.created_at, COALESCE(a.visitor_id, '{LEGACY_VISITOR}') AS visitor_id,
+                       a.kind, a.score, a.total, '' AS detail,
+                       COALESCE(a.source_name, d.source_name) AS source_name, d.source_type
+                FROM activities a JOIN documents d ON d.id = a.document_id
+                {where} ORDER BY a.created_at DESC, a.id DESC LIMIT ?
+                """,
+                [*params, limit],
+            )
+        ]
+        if visitor_id != LEGACY_VISITOR:
+            event_where = "WHERE visitor_id = ?" if visitor_id else ""
+            rows += [
+                dict(r)
+                for r in conn.execute(
+                    f"""
+                    SELECT id, created_at, visitor_id, event AS kind, NULL AS score, NULL AS total,
+                           detail, source_name, source_type
+                    FROM events {event_where} ORDER BY created_at DESC, id DESC LIMIT ?
+                    """,
+                    [*([visitor_id] if visitor_id else []), limit],
+                )
+            ]
+    rows.sort(key=lambda r: r["created_at"], reverse=True)
+    return rows[:limit]
+
+
 # ---------- original session API (kept for compatibility) ----------
 
 
 def save_session(notes_text: str, summary: dict, quiz: list[dict], flashcards: list[dict]) -> int:
     with _connect() as conn:
-        cursor = conn.execute(
+        return conn.insert(
             """
             INSERT INTO sessions (created_at, notes_text, summary, quiz_json, flashcards_json)
             VALUES (?, ?, ?, ?, ?)
             """,
             (_now(), notes_text, json.dumps(summary), json.dumps(quiz), json.dumps(flashcards)),
         )
-        return cursor.lastrowid

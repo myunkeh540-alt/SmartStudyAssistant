@@ -23,7 +23,8 @@ key (see below) — other file types work without one.
 - `styles.css` — the app's custom styling (fonts, colors, cards, buttons).
 - `study_utils.py` — text extraction from uploaded files (TXT, PDF, DOCX, PPTX, CSV, XLSX, Markdown, preserving structure as Markdown; routes images to `ai_utils`).
 - `ai_utils.py` — OpenAI-backed summary/quiz/flashcard generation and quiz grading.
-- `db_utils.py` — SQLite persistence for saved study sessions.
+- `db_utils.py` — SQLite persistence for saved study sessions and anonymous visitor activity.
+- `admin_page.py` — password-protected admin view of every visitor's activity.
 - `export_utils.py` — CSV and PDF export helpers.
 - `requirements.txt` — Python dependencies.
 
@@ -59,6 +60,44 @@ Streamlit will print a local URL, usually `http://localhost:8501`. Open it in yo
 On first generation, the app creates a local `study_assistant.db` SQLite file
 (also git-ignored) to store your saved sessions, viewable in the **History**
 section of the sidebar.
+
+### Seeing everyone's activity (admin)
+
+Each browser gets a random anonymous ID stored in a cookie, and each person's
+History shows only their own activity. To see all visitors:
+
+1. Add `ADMIN_PASSWORD=your-password` to `.env` and restart the app.
+2. Open `http://localhost:8501/?admin` and enter the password.
+
+You get totals, a per-visitor table (visits, summaries, quizzes, average score,
+flashcard sets) and a filterable activity log. Clearing cookies or switching
+browser/device counts as a new visitor. Activity saved before tracking was added
+appears as `legacy`. Visitors are only recorded in the database of the machine
+running the app, so this works while everyone uses your ngrok link (section 3).
+
+### Hosting on Streamlit Community Cloud (shared database)
+
+A hosted copy loses local files when it restarts, and a copy on your PC and a copy
+in the cloud each have their own SQLite file, so the admin page can't see across
+them. Point every copy at one Postgres database instead:
+
+1. Create a free project at [supabase.com](https://supabase.com) (or Neon).
+2. In Supabase, click **Connect** and copy the **Session pooler** connection string
+   (the direct connection is IPv6-only and fails on Streamlit Cloud). Put your
+   database password in it.
+3. In Streamlit Cloud, open your app, then **Settings > Secrets**, and add:
+
+```toml
+DATABASE_URL = "postgresql://postgres.xxxx:YOUR-PASSWORD@aws-0-xx.pooler.supabase.com:5432/postgres"
+ADMIN_PASSWORD = "your-admin-password"
+APP_TIMEZONE = "Asia/Kuala_Lumpur"
+OPENAI_API_KEY = "sk-..."
+```
+
+4. Open `https://your-app.streamlit.app/?admin`. Tables are created automatically.
+
+To see the same data from your PC's admin page, put the same `DATABASE_URL` in your
+local `.env`. With `DATABASE_URL` empty the app uses the local SQLite file.
 
 ## 3. Expose it publicly with ngrok
 

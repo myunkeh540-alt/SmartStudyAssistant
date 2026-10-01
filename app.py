@@ -9,11 +9,14 @@ import base64
 import html
 import io
 import random
+import re
+import uuid
 from datetime import datetime
 
 import streamlit as st
 from dotenv import load_dotenv
 
+import admin_page
 import db_utils
 from ai_utils import (
     SUMMARY_SECTIONS,
@@ -27,12 +30,49 @@ from export_utils import flashcards_to_csv, quiz_to_csv, session_to_pdf
 from study_utils import TextExtractionError, extract_text
 
 load_dotenv()
-db_utils.init_db()
+
+
+@st.cache_resource
+def init_database() -> bool:
+    """Creates/migrates tables once per server process rather than on every rerun."""
+    db_utils.init_db()
+    return True
+
+
+init_database()
 
 st.set_page_config(page_title="Smart Study Assistant", layout="wide")
 
 with open("styles.css") as f:
     st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+VISITOR_COOKIE = "ssa_visitor"
+
+
+def get_visitor_id() -> str:
+    """
+    Anonymous per-browser ID, kept in a cookie so it survives refreshes and later
+    visits. A new ID is made (and the cookie set) when the browser has none; clearing
+    cookies or switching browser/device starts a new visitor.
+    """
+    if "visitor_id" not in st.session_state:
+        cookie = st.context.cookies.get(VISITOR_COOKIE, "")
+        visitor_id = cookie if re.fullmatch(r"[0-9a-f]{32}", cookie) else uuid.uuid4().hex
+        st.session_state.visitor_id = visitor_id
+        db_utils.touch_visitor(visitor_id)
+        # Set from JS on every new session so the one-year expiry slides forward.
+        st.html(
+            f"<script>document.cookie = '{VISITOR_COOKIE}={visitor_id}; max-age=31536000; path=/; SameSite=Lax';</script>",
+            unsafe_allow_javascript=True,
+        )
+    return st.session_state.visitor_id
+
+
+if "admin" in st.query_params:
+    admin_page.render()
+    st.stop()
+
+visitor_id = get_visitor_id()
 
 DEFAULTS = {
     "notes_text": "",
@@ -76,6 +116,11 @@ def reset_quiz_progress() -> None:
     ]
 
 
+def log_event(event: str, name: str = "", source_type: str = "", detail: str = "") -> None:
+    """Admin-visible trail of uploads and failures, even when nothing gets saved to History."""
+    db_utils.log_event(visitor_id, event, name, source_type, detail)
+
+
 def current_document_id() -> int:
     """History record for the notes currently loaded (created on first use)."""
     if st.session_state.document_id is None:
@@ -89,7 +134,7 @@ def current_document_id() -> int:
 
 def open_activity(activity_id: int) -> None:
     """Restore a past summary, quiz or flashcard set (and its notes) from History."""
-    a = db_utils.get_activity(activity_id)
+    a = db_utils.get_activity(activity_id, visitor_id)
     st.session_state.notes_text = a["notes_text"]
     st.session_state.notes_source_name = a["source_name"]
     st.session_state.notes_source_type = a["source_type"]
@@ -229,12 +274,16 @@ if section == "Summary":
         st.session_state.summary_text = None
         st.session_state.document_id = None
         if not key_configured:
+            log_event("generation_failed", name, source_type, "Summary: no API key configured")
             return
         with st.spinner("Reading your notes and writing the summary..."):
             try:
                 st.session_state.summary_text = generate_ai_summary(text)
-                db_utils.add_activity(current_document_id(), "summary", st.session_state.summary_text)
+                db_utils.add_activity(
+                    current_document_id(), "summary", st.session_state.summary_text, visitor_id, name
+                )
             except AIGenerationError as e:
+                log_event("generation_failed", name, source_type, f"Summary: {e}")
                 st.error(str(e))
 
     with paste_col:
@@ -249,6 +298,7 @@ if section == "Summary":
                 )
             if paste_submitted:
                 if pasted_text.strip():
+                    log_event("paste", "Pasted text", "Text", f"{len(pasted_text.split())} words")
                     load_and_summarize(pasted_text.strip(), "Pasted text", "Text")
                 else:
                     st.warning("Please paste some text first.")
@@ -268,16 +318,19 @@ if section == "Summary":
                     with st.spinner("Reading your file..."):
                         extracted = extract_text(uploaded_file)
                 except TextExtractionError as e:
+                    log_event("upload_failed", uploaded_file.name, "", str(e))
                     st.error(str(e))
                 else:
+                    ext = (
+                        uploaded_file.name.rsplit(".", 1)[-1].upper()
+                        if "." in uploaded_file.name
+                        else "FILE"
+                    )
                     if extracted.strip():
-                        ext = (
-                            uploaded_file.name.rsplit(".", 1)[-1].upper()
-                            if "." in uploaded_file.name
-                            else "FILE"
-                        )
+                        log_event("upload", uploaded_file.name, ext, f"{len(extracted.split())} words")
                         load_and_summarize(extracted.strip(), uploaded_file.name, ext)
                     else:
+                        log_event("upload_failed", uploaded_file.name, ext, "No text could be extracted")
                         st.warning("Could not extract any text from that file.")
 
     if not st.session_state.notes_text:
@@ -344,12 +397,22 @@ elif section == "Quiz":
                             st.session_state.summary_text,
                         )
                         st.session_state.quiz_activity_id = db_utils.add_activity(
-                            current_document_id(), "quiz", st.session_state.quiz_data
+                            current_document_id(),
+                            "quiz",
+                            st.session_state.quiz_data,
+                            visitor_id,
+                            st.session_state.notes_source_name,
                         )
                         reset_quiz_progress()
                         started = True
                     except AIGenerationError as e:
                         started = False
+                        log_event(
+                            "generation_failed",
+                            st.session_state.notes_source_name,
+                            st.session_state.notes_source_type,
+                            f"Quiz: {e}",
+                        )
                         st.error(str(e))
                 if started:
                     st.rerun()
@@ -411,7 +474,7 @@ elif section == "Quiz":
                         )
                         if st.session_state.quiz_activity_id is not None:
                             st.session_state.quiz_activity_id = db_utils.record_quiz_result(
-                                st.session_state.quiz_activity_id, correct, total
+                                st.session_state.quiz_activity_id, correct, total, visitor_id
                             )
                         st.session_state.quiz_phase = "results"
                     else:
@@ -520,9 +583,19 @@ elif section == "Flashcards":
                     st.session_state.flashcard_index = 0
                     st.session_state.flashcard_revealed = False
                     db_utils.add_activity(
-                        current_document_id(), "flashcards", st.session_state.flashcards_data
+                        current_document_id(),
+                        "flashcards",
+                        st.session_state.flashcards_data,
+                        visitor_id,
+                        st.session_state.notes_source_name,
                     )
                 except AIGenerationError as e:
+                    log_event(
+                        "generation_failed",
+                        st.session_state.notes_source_name,
+                        st.session_state.notes_source_type,
+                        f"Flashcards: {e}",
+                    )
                     st.error(str(e))
 
     if st.session_state.flashcards_data:
@@ -580,7 +653,7 @@ elif section == "Flashcards":
 
 elif section == "History":
     st.subheader(":material/history: History")
-    history = db_utils.list_history()
+    history = db_utils.list_history(visitor_id)
 
     if not history:
         st.info(
@@ -589,7 +662,7 @@ elif section == "History":
             icon=":material/info:",
         )
     else:
-        stats = db_utils.history_stats()
+        stats = db_utils.history_stats(visitor_id)
         average = f"{stats['average_score']}%" if stats["average_score"] is not None else "None yet"
         stat_cols = st.columns(3)
         for col, value, label in (
@@ -649,7 +722,7 @@ elif section == "History":
                 elif doc["source_name"] == "Pasted text":
                     st.caption("Pasted text")
                 for a in acts:
-                    when = datetime.fromisoformat(a["created_at"]).astimezone().strftime("%d %b %Y, %H:%M")
+                    when = datetime.fromisoformat(a["created_at"]).astimezone(db_utils.local_tz()).strftime("%d %b %Y, %H:%M")
                     if a["kind"] == "quiz":
                         if a["score"] is not None and a["total"]:
                             detail = f"{a['score']} of {a['total']} ({round(100 * a['score'] / a['total'])}%)"
